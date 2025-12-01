@@ -34,9 +34,7 @@ int cotaInferior(int visitados[]) {
 }
 
 
-// ---------------------------------------------
-// Branch & Bound recursivo
-// ---------------------------------------------
+// Branch And Bound recursivo
 void branchAndBound(int camino[], int visitados[], int nivel, int costoActual,
                     int *mejorCostoLocal, int mejorCaminoLocal[]) {
 
