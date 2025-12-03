@@ -94,6 +94,10 @@ int main() {
 
     // Procesos hijos: cada uno explora una raíz distinta (0 → siguienteCiudad)
     for (int siguienteCiudad = 1; siguienteCiudad < N; siguienteCiudad++) {
+
+        if (dist[0][siguienteCiudad] == 0)
+            continue;   // verifico que haya arista entre 0 y siguienteCiudad, para no crear procesos innecesarios, por ende salto la rama actual si no hay arista
+
         // Pipe para que se pueda comunicar el padre con el hijo
         // el pipe es unidireccional, en pipefd[0] se lee y en pipefd[1] se escribe
         int pipefd[2];
