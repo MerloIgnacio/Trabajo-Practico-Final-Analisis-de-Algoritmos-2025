@@ -3,9 +3,11 @@
 #include <limits.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/time.h>
 
 #define N 4  
 
+// Matriz de distancias entre ciudades
 int dist[N][N] = {
     {0,10,15,20},
     {10,0,35,25},
@@ -13,10 +15,8 @@ int dist[N][N] = {
     {20,25,30,0}
 };
 
-
-// La cota inferior hace que para cada ciudad no visitada se toma la arista saliente mas barata y se suman todos esos minimos.
-// Esta cota es una estimacion optimista del costo que falta para completar el camino por todos los nodos.
-// Por ende sirve para poder cortar ramas que no pueden mejorar la mejor solucion encontrada hasta el momento.
+// Calcula una cota inferior "optimista" para decidir si seguir explorando o podar.
+// Para cada ciudad no visitada toma la arista más barata que sale de ella.
 int cotaInferior(int visitados[]) {
     int sum = 0;
 
@@ -33,154 +33,164 @@ int cotaInferior(int visitados[]) {
     return sum;
 }
 
-
-// Branch And Bound recursivo
+// Branch and Bound recursivo clásico para el TSP
 void branchAndBound(int camino[], int visitados[], int nivel, int costoActual,
                     int *mejorCostoLocal, int mejorCaminoLocal[]) {
 
-    // Caso base, si el nivel es igual a N, se ha visitado todas las ciudades
-    // Osea que el camino actual contiene N ciudades y solo falta volver al origen
+    // Si ya pasamos por todas las ciudades, calculamos el costo total del tour
     if (nivel == N) {
         int ultimo = camino[nivel - 1];
-        // Se calcula el costo del camino actual mas el regreso al origen para el costo total
-        int costoTotal = costoActual + dist[ultimo][0]; // retorno al origen
-        // Si el costo total es mejor que el costo local mejor, entonces se actualiza
-        // el mejor camino encontrado por este proceso
+        int costoTotal = costoActual + dist[ultimo][0]; // volver al origen
+
+        // Actualizar el mejor camino del proceso si este es más barato
         if (costoTotal < *mejorCostoLocal) {
             *mejorCostoLocal = costoTotal;
             for (int i = 0; i < N; i++)
-            //copio el camino actual al mejor camino local
                 mejorCaminoLocal[i] = camino[i];
-            // Agrego el regreso al origen al final del camino
-            mejorCaminoLocal[N] = 0;
+            mejorCaminoLocal[N] = 0; // regreso al origen
         }
-        
-    }else{
 
+    } else {
 
-    // primero se calcula una cota inferior optimista para esta rama
-    // Por ende la cota va a ser el costo actual mas el minimo costo posible para completar el resto del camino
-    int cota = costoActual + cotaInferior(visitados);
-    // Si la cota es mayor o igual al mejor costo local encontrado hasta ahora, esta rama nunca va a poder mejorar la solucion
-    // Por ende se poda esta rama, y no se la sigue explorando.
-    //Solo se explora sí es menor
-    if (cota < *mejorCostoLocal){
-    int ultimaCiudad = camino[nivel - 1];
+        // Cota inferior para podar ramas que no pueden mejorar la solución
+        int cota = costoActual + cotaInferior(visitados);
 
-    for (int c = 0; c < N; c++) {
-        // Para cada ciudad no visitada, se marca como visitada y se agrega al camino
-        if (!visitados[c]) {
+        if (cota < *mejorCostoLocal) {
+            int ultimaCiudad = camino[nivel - 1];
 
-            visitados[c] = 1;
-            camino[nivel] = c;
+            // Intentar ir a cualquier ciudad que aún no esté visitada
+            for (int c = 0; c < N; c++) {
+                if (!visitados[c]) {
 
-            // Llamada recursiva para el siguiente nivel, teniendo en cuenta el costo de ir a la siguiente ciudad
-            branchAndBound(camino, visitados, nivel + 1,
-                           costoActual + dist[ultimaCiudad][c],
-                           mejorCostoLocal, mejorCaminoLocal);
+                    visitados[c] = 1;
+                    camino[nivel] = c;
 
-            visitados[c] = 0;
+                    branchAndBound(camino, visitados, nivel + 1,
+                                   costoActual + dist[ultimaCiudad][c],
+                                   mejorCostoLocal, mejorCaminoLocal);
+
+                    visitados[c] = 0; // backtracking
+                }
+            }
         }
     }
-
-
-    }
-      
-
-
-}
-
 }
 
 
-// Paralelismo con fork: cada proceso hijo explora una raiz distinta (0 -> i)
+// Paralelización con fork: cada proceso explora un subárbol diferente del TSP
 int main() {
-    //empiezo el mejor costo global en infinito
+
+    struct timeval inicio, fin;
+    gettimeofday(&inicio, NULL); // arranca el contador de tiempo
+
     int mejorCostoGlobal = INT_MAX;
-    //creo el arreglo para el mejor camino global
     int mejorCaminoGlobal[N+1];
 
-    printf("Nodo origen: 0"); 
-
+    printf("Nodo origen: 0\n\n");
     printf("Matriz de distancias:\n\n");
 
     for (int i = 0; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-            printf("%3d ", dist[i][j]);   // %3d alinea bonito
-        }
+        for (int j = 0; j < N; j++)
+            printf("%3d ", dist[i][j]);
         printf("\n");
     }
 
-    // Procesos hijos: cada uno explora una raíz distinta (0 → siguienteCiudad)
+    printf("\nCreando procesos hijos...\n");
+
+    // Se usa un pipe distinto por cada hijo, así cada uno manda su solución
+    int pipefd[N][2];
+    pid_t hijos[N];
+    int numHijos = 0;
+
+    // Cada proceso hijo explora un camino que comienza 0 -> siguienteCiudad
     for (int siguienteCiudad = 1; siguienteCiudad < N; siguienteCiudad++) {
 
-        if (dist[0][siguienteCiudad] != 0){ // verifico que haya arista entre 0 y siguienteCiudad, para no crear procesos innecesarios, por ende salto la rama actual si no hay arista
+        if (dist[0][siguienteCiudad] != 0) {
 
-        // Pipe para que se pueda comunicar el padre con el hijo
-        // el pipe es unidireccional, en pipefd[0] se lee y en pipefd[1] se escribe
-        int pipefd[2];
-        pipe(pipefd);
+            int idx = numHijos;
+            pipe(pipefd[idx]); // pipe exclusivo del hijo idx
 
-        pid_t pid = fork();
+            pid_t pid = fork();
 
-        if (pid == 0) {
-            // Proceso Hijo
-            // cierro el extremo de lectura del pipe, por que el hijo solo quiere escribir
-            close(pipefd[0]);
-            // inicializo el hijo para que explore la rama que empieza en 0 -> siguienteCiudad
-            int visitados[N] = {0};
-            int camino[N];
-            int mejorCostoLocal = INT_MAX;
-            int mejorCaminoLocal[N+1];
+            if (pid == 0) {
+                // ----------------- PROCESO HIJO -----------------
 
-            visitados[0] = 1;
-            visitados[siguienteCiudad] = 1;
+                close(pipefd[idx][0]); // este proceso solo escribe
 
-            camino[0] = 0;
-            camino[1] = siguienteCiudad;
+                printf("[HIJO %d] Explorando rama desde 0 -> %d\n",
+                        getpid(), siguienteCiudad);
 
-            branchAndBound(camino, visitados, 2, dist[0][siguienteCiudad],
-                           &mejorCostoLocal, mejorCaminoLocal);
+                int visitados[N] = {0};
+                int camino[N];
+                int mejorCostoLocal = INT_MAX;
+                int mejorCaminoLocal[N+1];
 
-            // Luego de que cada hijo explore su subarbol le envia al padre el costo + camino
-            write(pipefd[1], &mejorCostoLocal, sizeof(int));
-            write(pipefd[1], mejorCaminoLocal, sizeof(int) * (N+1));
-            // Cierro la escritura del pipe y termino el proceso hijo
-            close(pipefd[1]);
-            exit(0);
-        }
-        else {
-            // Proceso Padre, cierro el extremo de escritura del pipe, por que el padre solo quiere leer
-            close(pipefd[1]);
+                visitados[0] = 1;
+                visitados[siguienteCiudad] = 1;
 
-            int costoHijo;
-            int caminoHijo[N+1];
-            //Se recibe el costo y el camino desde el hijo
-            read(pipefd[0], &costoHijo, sizeof(int));
-            read(pipefd[0], caminoHijo, sizeof(int) * (N+1));
-            // Cierro la lectura del pipe y espero a que el hijo termine
-            close(pipefd[0]);
-            waitpid(pid, NULL, 0);
-            // Si el costo recibido del hijo es mejor que el mejor costo global, se actualiza
-            if (costoHijo < mejorCostoGlobal) {
-                mejorCostoGlobal = costoHijo;
-                // Guardo la ruta completa del hijo
-                for (int i = 0; i < N+1; i++)
-                    mejorCaminoGlobal[i] = caminoHijo[i];
+                camino[0] = 0;
+                camino[1] = siguienteCiudad;
+
+                // El hijo ejecuta su búsqueda completa
+                branchAndBound(camino, visitados, 2, dist[0][siguienteCiudad],
+                               &mejorCostoLocal, mejorCaminoLocal);
+
+                printf("[HIJO %d] Terminé. Mejor costo local = %d\n",
+                        getpid(), mejorCostoLocal);
+
+                // Enviar el resultado al proceso padre
+                write(pipefd[idx][1], &mejorCostoLocal, sizeof(int));
+                write(pipefd[idx][1], mejorCaminoLocal, sizeof(int)*(N+1));
+
+                close(pipefd[idx][1]);
+                exit(0);
+
+            } else {
+                // ----------------- PROCESO PADRE -----------------
+
+                close(pipefd[idx][1]); // el padre solo lee
+
+                printf("[PADRE] Proceso hijo creado (pid = %d) para ciudad %d\n",
+                        pid, siguienteCiudad);
+
+                hijos[idx] = pid;
+                numHijos++;
             }
         }
+    }
 
+    printf("\nPADRE: Esperando resultados...\n\n");
+
+    // El padre ahora junta todos los resultados de los hijos
+    for (int i = 0; i < numHijos; i++) {
+
+        int costoHijo;
+        int caminoHijo[N+1];
+
+        // read se bloquea hasta que el hijo escriba su solución
+        read(pipefd[i][0], &costoHijo, sizeof(int));
+        read(pipefd[i][0], caminoHijo, sizeof(int)*(N+1));
+        close(pipefd[i][0]);
+
+        waitpid(hijos[i], NULL, 0); // esperar que termine formalmente
+
+        printf("[PADRE] Recibí costo %d del hijo %d\n", costoHijo, hijos[i]);
+
+        // Actualización del mejor resultado global
+        if (costoHijo < mejorCostoGlobal) {
+            mejorCostoGlobal = costoHijo;
+            for (int j = 0; j < N+1; j++)
+                mejorCaminoGlobal[j] = caminoHijo[j];
         }
-              
-       
     }
 
     printf("Mejor costo global = %d\n", mejorCostoGlobal);
     printf("Mejor ruta global = ");
     for (int i = 0; i < N+1; i++)
         printf("%d ", mejorCaminoGlobal[i]);
-
     printf("\n");
+
+
 
     return 0;
 }
