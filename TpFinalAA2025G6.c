@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
-#define N 4   // mismas dimensiones que tu Java
+#define N 4  
 
 int dist[N][N] = {
     {0,10,15,20},
@@ -54,17 +54,17 @@ void branchAndBound(int camino[], int visitados[], int nivel, int costoActual,
             // Agrego el regreso al origen al final del camino
             mejorCaminoLocal[N] = 0;
         }
-        return;
-    }
+        
+    }else{
+
 
     // primero se calcula una cota inferior optimista para esta rama
     // Por ende la cota va a ser el costo actual mas el minimo costo posible para completar el resto del camino
     int cota = costoActual + cotaInferior(visitados);
     // Si la cota es mayor o igual al mejor costo local encontrado hasta ahora, esta rama nunca va a poder mejorar la solucion
-    // Por ende se poda esta rama, y no se la sigue explorando
-    if (cota >= *mejorCostoLocal)
-        return;
-
+    // Por ende se poda esta rama, y no se la sigue explorando.
+    //Solo se explora sí es menor
+    if (cota < *mejorCostoLocal){
     int ultimaCiudad = camino[nivel - 1];
 
     for (int c = 0; c < N; c++) {
@@ -82,6 +82,14 @@ void branchAndBound(int camino[], int visitados[], int nivel, int costoActual,
             visitados[c] = 0;
         }
     }
+
+
+    }
+      
+
+
+}
+
 }
 
 
@@ -92,11 +100,21 @@ int main() {
     //creo el arreglo para el mejor camino global
     int mejorCaminoGlobal[N+1];
 
+    printf("Nodo origen: 0"); 
+
+    printf("Matriz de distancias:\n\n");
+
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            printf("%3d ", dist[i][j]);   // %3d alinea bonito
+        }
+        printf("\n");
+    }
+
     // Procesos hijos: cada uno explora una raíz distinta (0 → siguienteCiudad)
     for (int siguienteCiudad = 1; siguienteCiudad < N; siguienteCiudad++) {
 
-        if (dist[0][siguienteCiudad] == 0)
-            continue;   // verifico que haya arista entre 0 y siguienteCiudad, para no crear procesos innecesarios, por ende salto la rama actual si no hay arista
+        if (dist[0][siguienteCiudad] != 0){ // verifico que haya arista entre 0 y siguienteCiudad, para no crear procesos innecesarios, por ende salto la rama actual si no hay arista
 
         // Pipe para que se pueda comunicar el padre con el hijo
         // el pipe es unidireccional, en pipefd[0] se lee y en pipefd[1] se escribe
@@ -151,6 +169,10 @@ int main() {
                     mejorCaminoGlobal[i] = caminoHijo[i];
             }
         }
+
+        }
+              
+       
     }
 
     printf("Mejor costo global = %d\n", mejorCostoGlobal);
